@@ -1,0 +1,25 @@
+{
+  "project": "nest-rest-generic-mikroorm",
+  "generated_files": 43,
+  "source_files": 17,
+  "test_files": 6,
+  "test_cases_authored": 14,
+  "docs_files": 7,
+  "parity_status": {
+    "IMPLEMENTED": 43,
+    "DESIGNED": 2,
+    "INTENTIONAL_DIFFERENCE": 5,
+    "TESTED": 0,
+    "VERIFIED": 0
+  },
+  "verification": {
+    "package_json": "PASS",
+    "npm_pack_dry_run": "PASS",
+    "prohibited_pattern_audit": "PASS",
+    "dependency_install": "BLOCKED_BY_NETWORK",
+    "typecheck": "BLOCKED_BY_MISSING_DEPENDENCIES",
+    "build": "BLOCKED_BY_MISSING_DEPENDENCIES",
+    "lint": "BLOCKED_BY_MISSING_DEPENDENCIES",
+    "tests": "BLOCKED_BY_MISSING_DEPENDENCIES"
+  }
+}
