@@ -1,5 +1,5 @@
 {
-  "name": "ronu/nest-rest-generic-mikroorm",
+  "name": "@ronu/nest-rest-generic-mikroorm",
   "version": "1.0.0",
   "description": "Generic NestJS REST base classes and query tooling for MikroORM, preserving the observable API of rest-generic-class and the sibling TypeORM/Sequelize packages.",
   "author": "Charlietyn",
@@ -46,7 +46,8 @@
     "test:integration": "vitest run tests/integration",
     "test:coverage": "vitest run --coverage",
     "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build",
-    "check:package": "npm run build && npx -y publint && npx -y @arethetypeswrong/cli --pack ."
+    "check:package": "npm run build && npx -y publint && npx -y @arethetypeswrong/cli --pack .",
+    "release": "node scripts/publish.mjs"
   },
   "peerDependencies": {
     "@mikro-orm/core": "^6.0.0 || ^7.0.0",
