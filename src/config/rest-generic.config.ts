@@ -46,6 +46,20 @@ export type DeepPartial<T> = {
 
 export const REST_GENERIC_CONFIG = Symbol.for('nest-rest-generic-mikroorm:config');
 
+/**
+ * Operators enabled out of the box.
+ *
+ * `regexp` / `not regexp` are supported but deliberately NOT enabled by default:
+ * they compile a caller-supplied pattern with `new RegExp(...)`, which is a
+ * denial-of-service vector (a crafted pattern can hang the event loop). Opt in
+ * per application only when the endpoint is trusted:
+ *
+ * ```ts
+ * GenericRestModule.forRoot({
+ *   filtering: { allowedOperators: [...DEFAULT_ALLOWED_OPERATORS, 'regexp', 'not regexp'] },
+ * })
+ * ```
+ */
 export const DEFAULT_ALLOWED_OPERATORS: readonly RestOperator[] = [
   '=', '!=', '<>', '<', '>', '<=', '>=',
   'like', 'not like', 'ilike', 'not ilike',
@@ -54,7 +68,6 @@ export const DEFAULT_ALLOWED_OPERATORS: readonly RestOperator[] = [
   'null', 'not null', 'notnull',
   'exists', 'not exists',
   'date', 'not date', 'notdate',
-  'regexp', 'not regexp',
 ];
 
 export const DEFAULT_CONFIG: RestGenericConfig = {

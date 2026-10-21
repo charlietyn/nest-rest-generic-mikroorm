@@ -1,8 +1,21 @@
-import { Entity, ManyToOne, PrimaryKey, Property, type Rel } from '@mikro-orm/core';
-import { RestGenericEntity } from '../src/types/entity-options.js';
+import { defineEntity, type InferEntity } from '@mikro-orm/core';
+import { registerRestEntity } from '../src/index.js';
 import { Category } from './category.entity.js';
 
-@RestGenericEntity<Product>({
+export const Product = defineEntity({
+  name: 'Product',
+  properties: (p) => ({
+    id: p.integer().primary(),
+    name: p.string(),
+    price: p.decimal(),
+    category: p.manyToOne(Category),
+    deletedAt: p.datetime().nullable(),
+  }),
+});
+
+export type Product = InferEntity<typeof Product>;
+
+registerRestEntity<Product>(Product, {
   model: 'Product',
   primaryKey: 'id',
   relations: ['category'],
@@ -10,21 +23,4 @@ import { Category } from './category.entity.js';
   hiddenFields: [],
   softDeleteField: 'deletedAt',
   defaultPageSize: 20,
-})
-@Entity()
-export class Product {
-  @PrimaryKey()
-  id!: number;
-
-  @Property()
-  name!: string;
-
-  @Property({ type: 'decimal' })
-  price!: string;
-
-  @ManyToOne(() => Category)
-  category!: Rel<Category>;
-
-  @Property({ nullable: true })
-  deletedAt?: Date | null;
-}
+});

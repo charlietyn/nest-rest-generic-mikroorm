@@ -1,6 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import type {
-  EntityData,
   EntityManager,
   EntityName,
   EntityRepository,
@@ -8,7 +7,7 @@ import type {
   FindOptions,
   Primary,
 } from '@mikro-orm/core';
-import { RgcCacheService, type CacheContext } from '../cache/cache.service.js';
+import type { CacheContext, RgcCacheService } from '../cache/cache.service.js';
 import type { RestGenericConfig } from '../config/rest-generic.config.js';
 import { DEFAULT_CONFIG } from '../config/rest-generic.config.js';
 import { ExportService, type ExportFile, type ExportOptions } from '../export/export.service.js';
@@ -25,7 +24,33 @@ import { maybeJson } from '../query/condition.parser.js';
 import { MikroOrmQueryTranslator } from '../query/mikroorm.translator.js';
 import { serializeEntity, serializeMany } from '../serialization/entity.serializer.js';
 import { getDeniedFieldsForUser, stripDeniedFields, type RoleAwareUser } from '../security/field-access.js';
-import { getRestEntityOptions } from '../types/entity-options.js';
+import { getRestEntityOptions, resolveEntityName } from '../types/entity-options.js';
+
+/**
+ * MikroORM 7 narrows `FilterQuery` and `EntityData` through per-entity index and
+ * property metadata. Those conditional types cannot be satisfied from an
+ * unbounded generic `T`, so the base service talks to the ORM through these
+ * structural views while keeping its own public signatures precise.
+ */
+interface LooseRepository<T> {
+  find(where: unknown, options?: unknown): Promise<T[]>;
+  findOne(where: unknown, options?: unknown): Promise<T | null>;
+  findAndCount(where: unknown, options?: unknown): Promise<[T[], number]>;
+  create(data: unknown): T;
+  assign(entity: T, data: unknown, options?: unknown): T;
+}
+
+interface LooseEntityManager<T> {
+  getRepository(entity: unknown): LooseRepository<T>;
+  find(entity: unknown, where: unknown, options?: unknown): Promise<T[]>;
+  findOne(entity: unknown, where: unknown, options?: unknown): Promise<T | null>;
+  assign(entity: T, data: unknown, options?: unknown): T;
+  persist(entity: T | T[]): { flush(): Promise<void> };
+  remove(entity: T): { flush(): Promise<void> };
+  flush(): Promise<void>;
+  nativeDelete(entity: unknown, where: unknown): Promise<number>;
+  transactional<R>(cb: (em: LooseEntityManager<T>) => Promise<R>): Promise<R>;
+}
 
 export abstract class BaseService<T extends object> {
   protected readonly repo: EntityRepository<T>;
@@ -36,6 +61,11 @@ export abstract class BaseService<T extends object> {
   protected cacheTtl: number | null = null;
   protected cacheableOperations: string[] = [];
 
+  /** Structural view of {@link repo}; see {@link LooseRepository}. */
+  private readonly rows: LooseRepository<T>;
+  /** Structural view of {@link em}; see {@link LooseEntityManager}. */
+  private readonly store: LooseEntityManager<T>;
+
   constructor(
     protected readonly em: EntityManager,
     protected readonly entity: EntityName<T>,
@@ -43,15 +73,17 @@ export abstract class BaseService<T extends object> {
     protected readonly cache?: RgcCacheService,
   ) {
     this.repo = em.getRepository(entity);
+    this.rows = this.repo;
+    this.store = em as unknown as LooseEntityManager<T>;
     const entityOptions = getRestEntityOptions(entity);
     this.primaryKey = entityOptions.primaryKey ?? 'id';
-    this.modelName = entityOptions.model ?? (typeof entity === 'function' ? entity.name : String(entity));
+    this.modelName = entityOptions.model ?? resolveEntityName(entity);
     this.translator = new MikroOrmQueryTranslator(em, entity, config);
   }
 
   async list_all(params: FilterParams = {}, toJson = true, ctx?: CacheContext): Promise<unknown> {
     if (this.cache && this.shouldCache('list_all', params)) {
-      return this.cache.remember('list_all', this.modelName, params, ctx, params.cache_ttl ?? this.cacheTtl, () => this.listAllRaw(params, toJson));
+      return this.cache.remember('list_all', this.modelName, params, ctx, this.resolveTtl(params), () => this.listAllRaw(params, toJson));
     }
     return this.listAllRaw(params, toJson);
   }
@@ -66,13 +98,13 @@ export abstract class BaseService<T extends object> {
     const { where, options } = this.translator.build(params);
     const pagination = maybeJson<PaginationParams>(params.pagination);
     if (pagination) return this.paginate(where, options, pagination);
-    const rows = await this.repo.find(where, options);
+    const rows = await this.rows.find(where, options);
     return toJson ? { data: serializeMany(this.entity, rows) } : rows;
   }
 
   async get_one(params: FilterParams = {}, toJson = true, ctx?: CacheContext): Promise<unknown> {
     if (this.cache && this.shouldCache('get_one', params)) {
-      return this.cache.remember('get_one', this.modelName, params, ctx, params.cache_ttl ?? this.cacheTtl, () => this.getOneRaw(params, toJson));
+      return this.cache.remember('get_one', this.modelName, params, ctx, this.resolveTtl(params), () => this.getOneRaw(params, toJson));
     }
     return this.getOneRaw(params, toJson);
   }
@@ -83,7 +115,7 @@ export abstract class BaseService<T extends object> {
 
   private async getOneRaw(params: FilterParams, toJson: boolean): Promise<unknown> {
     const { where, options } = this.translator.build(params);
-    const row = await this.repo.findOne(where, options);
+    const row = await this.rows.findOne(where, options);
     if (!row) return toJson ? { data: null } : {};
     return toJson ? { data: serializeEntity(this.entity, row) } : row;
   }
@@ -91,7 +123,7 @@ export abstract class BaseService<T extends object> {
   async show(params: FilterParams, id: Primary<T>): Promise<unknown> {
     const { where, options } = this.translator.build({ ...params, pagination: null, orderby: null });
     const finalWhere = andWhere(where, { [this.primaryKey]: id } as FilterQuery<T>);
-    const row = await this.repo.findOne(finalWhere, options);
+    const row = await this.rows.findOne(finalWhere, options);
     if (!row) throw new NotFoundException(`${this.modelName} with id ${String(id)} not found.`);
     return serializeEntity(this.entity, row);
   }
@@ -105,15 +137,20 @@ export abstract class BaseService<T extends object> {
     if (!list.length || list.some((item) => !item || typeof item !== 'object' || Array.isArray(item))) {
       throw new BadRequestException('Params must be an object or an array of objects.');
     }
-    const result = await this.em.transactional(async (em: EntityManager) => {
+    const result = await this.store.transactional(async (em) => {
       const repo = em.getRepository(this.entity);
-      const models: WriteItemResult<Record<string, unknown>>[] = [];
+      const created: T[] = [];
       for (const raw of list as Record<string, unknown>[]) {
         const prepared = await this.beforeCreate(raw);
-        const entity = repo.create(prepared as EntityData<T>);
-        await em.persist(entity).flush();
-        models.push({ success: true, model: serializeEntity(this.entity, entity) });
+        created.push(repo.create(prepared));
       }
+      // One flush for the whole batch: generated columns and defaults are only
+      // readable afterwards, so serialization happens once the write completed.
+      await em.persist(created).flush();
+      const models: WriteItemResult<Record<string, unknown>>[] = created.map((entity) => ({
+        success: true,
+        model: serializeEntity(this.entity, entity),
+      }));
       return list.length === 1
         ? { success: true, model: models[0]?.model }
         : { success: true, models };
@@ -124,12 +161,12 @@ export abstract class BaseService<T extends object> {
 
   async update(attributes: Record<string, unknown>, id: Primary<T>): Promise<WriteResult<Record<string, unknown>>> {
     const key = getRestEntityOptions(this.entity).fieldKeyUpdate ?? this.primaryKey;
-    const result = await this.em.transactional(async (em: EntityManager) => {
+    const result = await this.store.transactional(async (em) => {
       const repo = em.getRepository(this.entity);
-      const entity = await repo.findOne({ [key]: id } as FilterQuery<T>);
+      const entity = await repo.findOne({ [key]: id });
       if (!entity) throw new NotFoundException(`${this.modelName} with ${key} ${String(id)} not found.`);
       const prepared = await this.beforeUpdate(attributes, entity);
-      repo.assign(entity, prepared as EntityData<T>, { mergeObjectProperties: true });
+      repo.assign(entity, stripKey(prepared, key), { mergeObjectProperties: true });
       await em.flush();
       return { success: true, model: serializeEntity(this.entity, entity) };
     });
@@ -138,8 +175,9 @@ export abstract class BaseService<T extends object> {
   }
 
   async update_multiple(list: readonly Record<string, unknown>[]): Promise<WriteResult<Record<string, unknown>>> {
-    const result = await this.em.transactional(async (em: EntityManager) => {
+    const result = await this.store.transactional(async (em) => {
       const repo = em.getRepository(this.entity);
+      const updated: { index: number; entity: T }[] = [];
       const models: WriteItemResult<Record<string, unknown>>[] = [];
       let success = true;
       for (const item of list) {
@@ -149,17 +187,22 @@ export abstract class BaseService<T extends object> {
           models.push({ success: false, message: `Missing ${this.primaryKey}.` });
           continue;
         }
-        const entity = await repo.findOne({ [this.primaryKey]: id } as FilterQuery<T>);
+        const entity = await repo.findOne({ [this.primaryKey]: id });
         if (!entity) {
           success = false;
           models.push({ success: false, message: `Record ${String(id)} not found.` });
           continue;
         }
         const prepared = await this.beforeUpdate(item, entity);
-        repo.assign(entity, prepared as EntityData<T>, { mergeObjectProperties: true });
-        models.push({ success: true, model: serializeEntity(this.entity, entity) });
+        repo.assign(entity, stripKey(prepared, this.primaryKey), { mergeObjectProperties: true });
+        updated.push({ index: models.length, entity });
+        models.push({ success: true });
       }
       await em.flush();
+      // Serialize after the flush so persisted values (defaults, triggers) show up.
+      for (const { index, entity } of updated) {
+        models[index] = { success: true, model: serializeEntity(this.entity, entity) };
+      }
       return { success, models };
     });
     this.bumpCache();
@@ -172,12 +215,12 @@ export abstract class BaseService<T extends object> {
 
   async destroy(id: Primary<T>): Promise<WriteResult<Record<string, unknown>>> {
     const softField = getRestEntityOptions(this.entity).softDeleteField;
-    const result = await this.em.transactional(async (em: EntityManager) => {
+    const result = await this.store.transactional(async (em) => {
       const repo = em.getRepository(this.entity);
-      const entity = await repo.findOne({ [this.primaryKey]: id } as FilterQuery<T>);
+      const entity = await repo.findOne({ [this.primaryKey]: id });
       if (!entity) throw new NotFoundException(`${this.modelName} with id ${String(id)} not found.`);
       if (softField) {
-        repo.assign(entity, { [softField]: new Date() } as EntityData<T>);
+        repo.assign(entity, { [softField]: new Date() });
         await em.flush();
       } else {
         await em.remove(entity).flush();
@@ -190,14 +233,14 @@ export abstract class BaseService<T extends object> {
 
   async destroybyid(ids: unknown): Promise<WriteResult> {
     const list = normalizeIds(ids);
-    await this.em.transactional(async (em: EntityManager) => {
+    await this.store.transactional(async (em) => {
       const softField = getRestEntityOptions(this.entity).softDeleteField;
       if (softField) {
-        const rows = await em.find(this.entity, { [this.primaryKey]: { $in: list } } as FilterQuery<T>);
-        rows.forEach((row: T) => em.assign(row, { [softField]: new Date() } as EntityData<T>));
+        const rows = await em.find(this.entity, { [this.primaryKey]: { $in: list } });
+        rows.forEach((row) => em.assign(row, { [softField]: new Date() }));
         await em.flush();
       } else {
-        await em.nativeDelete(this.entity, { [this.primaryKey]: { $in: list } } as FilterQuery<T>);
+        await em.nativeDelete(this.entity, { [this.primaryKey]: { $in: list } });
       }
     });
     this.bumpCache();
@@ -208,10 +251,10 @@ export abstract class BaseService<T extends object> {
 
   async restore(id: Primary<T>): Promise<WriteResult<Record<string, unknown>>> {
     const field = this.requireSoftDeleteField();
-    const result = await this.em.transactional(async (em: EntityManager) => {
-      const row = await em.findOne(this.entity, { [this.primaryKey]: id } as FilterQuery<T>);
+    const result = await this.store.transactional(async (em) => {
+      const row = await em.findOne(this.entity, { [this.primaryKey]: id });
       if (!row) throw new NotFoundException(`${this.modelName} with id ${String(id)} not found.`);
-      em.assign(row, { [field]: null } as EntityData<T>);
+      em.assign(row, { [field]: null });
       await em.flush();
       return { success: true, model: serializeEntity(this.entity, row) };
     });
@@ -222,9 +265,9 @@ export abstract class BaseService<T extends object> {
   async restoreById(ids: unknown): Promise<WriteResult> {
     const field = this.requireSoftDeleteField();
     const list = normalizeIds(ids);
-    await this.em.transactional(async (em: EntityManager) => {
-      const rows = await em.find(this.entity, { [this.primaryKey]: { $in: list } } as FilterQuery<T>);
-      rows.forEach((row: T) => em.assign(row, { [field]: null } as EntityData<T>));
+    await this.store.transactional(async (em) => {
+      const rows = await em.find(this.entity, { [this.primaryKey]: { $in: list } });
+      rows.forEach((row) => em.assign(row, { [field]: null }));
       await em.flush();
     });
     this.bumpCache();
@@ -232,8 +275,8 @@ export abstract class BaseService<T extends object> {
   }
 
   async forceDelete(id: Primary<T>): Promise<WriteResult> {
-    await this.em.transactional(async (em: EntityManager) => {
-      const row = await em.findOne(this.entity, { [this.primaryKey]: id } as FilterQuery<T>);
+    await this.store.transactional(async (em) => {
+      const row = await em.findOne(this.entity, { [this.primaryKey]: id });
       if (!row) throw new NotFoundException(`${this.modelName} with id ${String(id)} not found.`);
       await em.remove(row).flush();
     });
@@ -243,7 +286,10 @@ export abstract class BaseService<T extends object> {
 
   async forceDeleteById(ids: unknown): Promise<WriteResult> {
     const list = normalizeIds(ids);
-    await this.em.nativeDelete(this.entity, { [this.primaryKey]: { $in: list } } as FilterQuery<T>);
+    // Wrapped like every other write path, so a bulk force-delete is atomic.
+    await this.store.transactional(async (em) => {
+      await em.nativeDelete(this.entity, { [this.primaryKey]: { $in: list } });
+    });
     this.bumpCache();
     return { success: true };
   }
@@ -276,21 +322,21 @@ export abstract class BaseService<T extends object> {
     const options = getRestEntityOptions(this.entity);
     if (!options.hierarchyParentField) throw new BadRequestException(`${this.modelName} has no hierarchyParentField.`);
     const hierarchyInput = params.hierarchy;
-    const hierarchy = hierarchyInput === true
+    const hierarchy = hierarchyInput === true || hierarchyInput === false || hierarchyInput == null
       ? {}
-      : hierarchyInput === false || hierarchyInput == null
-        ? {}
-        : (maybeJson<Record<string, unknown>>(hierarchyInput as string | Record<string, unknown>) ?? {});
+      : (maybeJson<Record<string, unknown>>(hierarchyInput as string | Record<string, unknown>) ?? {});
     const queryParams = { ...params, hierarchy: null, pagination: null };
     const { where, options: findOptions } = this.translator.build(queryParams);
-    const roots = await this.repo.find(where, findOptions);
-    const engine = new HierarchyEngine(this.repo, this.entity, this.primaryKey, options.hierarchyParentField);
+    const roots = await this.rows.find(where, findOptions);
+    const engine = new HierarchyEngine<T>(this.rows, this.entity, this.primaryKey, options.hierarchyParentField);
     const tree = await engine.buildFromRoots(roots, hierarchy);
     return toJson ? { data: tree } : tree;
   }
 
-  protected async beforeCreate(payload: Record<string, unknown>): Promise<Record<string, unknown>> { return payload; }
-  protected async beforeUpdate(payload: Record<string, unknown>, _entity: T): Promise<Record<string, unknown>> { return payload; }
+  /** Override to shape a payload before insert; may be async in a subclass. */
+  protected beforeCreate(payload: Record<string, unknown>): Promise<Record<string, unknown>> { return Promise.resolve(payload); }
+  /** Override to shape a payload before update; may be async in a subclass. */
+  protected beforeUpdate(payload: Record<string, unknown>, _entity: T): Promise<Record<string, unknown>> { return Promise.resolve(payload); }
 
   protected defaultPageSize(): number { return getRestEntityOptions(this.entity).defaultPageSize ?? 15; }
 
@@ -299,12 +345,16 @@ export abstract class BaseService<T extends object> {
     options: FindOptions<T, never>,
     pagination: PaginationParams,
   ): Promise<PaginatedResult<Record<string, unknown>> | CursorPaginatedResult<Record<string, unknown>>> {
-    const perPage = Math.max(1, Math.min(500, pagination.pageSize ?? pagination.pagesize ?? this.defaultPageSize()));
+    const perPage = Math.max(1, Math.min(500, toPositiveInt(pagination.pageSize ?? pagination.pagesize) ?? this.defaultPageSize()));
     if (pagination.infinity === true) {
       const cursorWhere = pagination.cursor == null
         ? where
         : andWhere(where, { [this.primaryKey]: { $gt: pagination.cursor } } as FilterQuery<T>);
-      const rows = await this.repo.find(cursorWhere, { ...options, limit: perPage + 1 });
+      // Keyset pagination is only stable under a deterministic order, and the
+      // cursor compares against the primary key - so that is the order we force
+      // unless the caller asked for one explicitly.
+      const orderBy = options.orderBy ?? { [this.primaryKey]: 'asc' };
+      const rows = await this.rows.find(cursorWhere, { ...options, orderBy, limit: perPage + 1 });
       const hasMore = rows.length > perPage;
       const page = rows.slice(0, perPage);
       const last = page.at(-1) as Record<string, unknown> | undefined;
@@ -315,8 +365,8 @@ export abstract class BaseService<T extends object> {
         has_more: hasMore,
       };
     }
-    const current = Math.max(1, pagination.page ?? 1);
-    const [rows, total] = await this.repo.findAndCount(where, {
+    const current = Math.max(1, toPositiveInt(pagination.page) ?? 1);
+    const [rows, total] = await this.rows.findAndCount(where, {
       ...options,
       limit: perPage,
       offset: (current - 1) * perPage,
@@ -332,10 +382,16 @@ export abstract class BaseService<T extends object> {
 
   private shouldCache(operation: string, params: FilterParams): boolean {
     if (params.cache === false || this.cacheable === false) return false;
-    const enabled = this.cacheable === true || this.config.cache.enabled;
+    // An explicit `cache=true` on the request opts in, matching `cache=false`
+    // opting out; otherwise fall back to the service flag and global config.
+    const enabled = params.cache === true || this.cacheable === true || this.config.cache.enabled;
     if (!enabled) return false;
     const operations = this.cacheableOperations.length ? this.cacheableOperations : [...this.config.cache.cacheableMethods];
     return operations.includes(operation);
+  }
+
+  private resolveTtl(params: FilterParams): number | null {
+    return toPositiveInt(params.cache_ttl) ?? this.cacheTtl;
   }
 
   private bumpCache(): void { this.cache?.bump(this.modelName); }
@@ -348,8 +404,22 @@ export abstract class BaseService<T extends object> {
 }
 
 function andWhere<T extends object>(a: FilterQuery<T>, b: FilterQuery<T>): FilterQuery<T> {
-  if (!a || Object.keys(a as object).length === 0) return b;
+  if (!a || Object.keys(a).length === 0) return b;
   return { $and: [a, b] } as FilterQuery<T>;
+}
+
+/** Identifier columns are matched on, never assigned from the payload. */
+function stripKey(payload: Record<string, unknown>, key: string): Record<string, unknown> {
+  if (!(key in payload)) return payload;
+  const clone = { ...payload };
+  Reflect.deleteProperty(clone, key);
+  return clone;
+}
+
+function toPositiveInt(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
 }
 
 function normalizeIds(ids: unknown): unknown[] {

@@ -4,52 +4,76 @@
   "description": "Generic NestJS REST base classes and query tooling for MikroORM, preserving the observable API of rest-generic-class and the sibling TypeORM/Sequelize packages.",
   "author": "Charlietyn",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/charlietyn/nest-rest-generic-mikroorm.git"
+  },
+  "homepage": "https://github.com/charlietyn/nest-rest-generic-mikroorm#readme",
+  "bugs": {
+    "url": "https://github.com/charlietyn/nest-rest-generic-mikroorm/issues"
+  },
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "types": "./dist/cjs/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md", "docs"],
-  "engines": { "node": ">=24" },
+  "files": [
+    "dist",
+    "README.md",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "build": "npm run clean && tsc -p tsconfig.build.json && tsc -p tsconfig.build.cjs.json && node -e \"require('fs').writeFileSync('dist/cjs/package.json', JSON.stringify({type:'commonjs'}))\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:coverage": "vitest run --coverage",
-    "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build"
+    "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "check:package": "npm run build && npx -y publint && npx -y @arethetypeswrong/cli --pack ."
   },
   "peerDependencies": {
-    "@mikro-orm/core": "^7.1.0",
-    "@mikro-orm/nestjs": "^7.0.0",
-    "@nestjs/common": "^11.0.0",
-    "@nestjs/core": "^11.0.0",
+    "@mikro-orm/core": "^6.0.0 || ^7.0.0",
+    "@mikro-orm/nestjs": "^6.0.0 || ^7.0.0",
+    "@nestjs/common": "^11.0.0 || ^12.0.0",
+    "@nestjs/core": "^11.0.0 || ^12.0.0",
+    "exceljs": "^4.4.0",
+    "pdfkit": ">=0.15.0",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.0"
   },
   "peerDependenciesMeta": {
-    "exceljs": { "optional": true },
-    "pdfkit": { "optional": true }
-  },
-  "dependencies": {
-    "class-transformer": "^0.5.1",
-    "class-validator": "^0.14.2"
+    "exceljs": {
+      "optional": true
+    },
+    "pdfkit": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
     "@mikro-orm/core": "^7.1.13",
-    "@mikro-orm/nestjs": "^7.0.2",
+    "@mikro-orm/nestjs": "^7.1.0",
     "@mikro-orm/sqlite": "^7.1.13",
-    "@nestjs/common": "^11.2.0",
-    "@nestjs/core": "^11.2.0",
-    "@nestjs/testing": "^11.2.0",
+    "@nestjs/common": "^12.2.0",
+    "@nestjs/core": "^12.2.0",
+    "@nestjs/testing": "^12.2.0",
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^3.2.0",
     "eslint": "^9.0.0",
@@ -60,5 +84,18 @@
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.0.0",
     "vitest": "^3.2.0"
+  },
+  "module": "./dist/esm/index.js",
+  "keywords": [
+    "nestjs",
+    "mikro-orm",
+    "rest",
+    "crud",
+    "generic",
+    "controller",
+    "service"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

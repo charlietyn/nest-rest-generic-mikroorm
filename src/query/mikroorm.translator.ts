@@ -4,7 +4,6 @@ import type {
   EntityName,
   FilterQuery,
   FindOptions,
-  QueryOrderMap,
 } from '@mikro-orm/core';
 import type { RestGenericConfig, RestOperator } from '../config/rest-generic.config.js';
 import type { FilterParams, OperCondition, OperNode, OrderByEntry } from '../interfaces/filter-params.interface.js';
@@ -51,7 +50,7 @@ export class MikroOrmQueryTranslator<T extends object> {
     const fields = this.buildFields(params, relations);
     if (fields.length) options.fields = fields as never;
     const orderBy = this.buildOrderBy(params.orderby);
-    if (orderBy.length) options.orderBy = orderBy as QueryOrderMap<T>[];
+    if (orderBy.length) options.orderBy = orderBy;
 
     return { where, options };
   }
@@ -62,7 +61,7 @@ export class MikroOrmQueryTranslator<T extends object> {
     for (const relation of relations) {
       for (const field of relation.fields ?? []) fields.push(`${relation.relation}.${field}`);
     }
-    fields.forEach((f) => this.assertFieldPath(f, true));
+    fields.forEach((f) => this.assertFieldPath(f));
     return [...new Set(fields)];
   }
 
@@ -71,7 +70,7 @@ export class MikroOrmQueryTranslator<T extends object> {
     if (!value) return [];
     if (!Array.isArray(value)) throw new BadRequestException('orderby must be an array.');
     for (const entry of value) {
-      for (const field of Object.keys(entry)) this.assertFieldPath(field, true);
+      for (const field of Object.keys(entry)) this.assertFieldPath(field);
     }
     return value;
   }
@@ -97,7 +96,7 @@ export class MikroOrmQueryTranslator<T extends object> {
     if (++this.conditionCount > this.config.filtering.maxConditions) throw new BadRequestException('Maximum number of filter conditions exceeded.');
     if (typeof condition !== 'string') return this.translateOper(condition, depth);
     const parsed = parseCondition(condition);
-    this.assertFieldPath(parsed.field, false);
+    this.assertFieldPath(parsed.field);
     if (!this.config.filtering.allowedOperators.includes(parsed.operator)) {
       throw new BadRequestException(`Operator "${parsed.operator}" is not allowed.`);
     }
@@ -107,7 +106,12 @@ export class MikroOrmQueryTranslator<T extends object> {
   private validateFlatCriteria(criteria: Record<string, unknown>): Criteria {
     const out: Criteria = {};
     for (const [field, value] of Object.entries(criteria)) {
-      this.assertFieldPath(field, false);
+      // Counted against the same budget as `oper` conditions - otherwise a huge
+      // `attr` object walks straight past maxConditions.
+      if (++this.conditionCount > this.config.filtering.maxConditions) {
+        throw new BadRequestException('Maximum number of filter conditions exceeded.');
+      }
+      this.assertFieldPath(field);
       out[field] = Array.isArray(value) ? { $in: value } : value;
     }
     return out;
@@ -132,15 +136,19 @@ export class MikroOrmQueryTranslator<T extends object> {
     }
   }
 
-  private assertFieldPath(path: string, allowRelation: boolean): void {
+  /**
+   * A dotted path is validated against the relation whitelist; a bare name is
+   * validated against `allowedFields`. Both filtering and projection go through
+   * the same rule, which is why this takes no "is a relation allowed here" flag.
+   */
+  private assertFieldPath(path: string): void {
     if (path.includes('__proto__') || path.includes('prototype') || path.includes('constructor')) {
       throw new BadRequestException('Unsafe field path.');
     }
     const [top, ...rest] = path.split('.');
     if (!top) throw new BadRequestException('Field path cannot be empty.');
     if (rest.length) {
-      if (!allowRelation) this.assertRelation(top);
-      else this.assertRelation(top);
+      this.assertRelation(top);
       return;
     }
     const configured = getRestEntityOptions(this.entity).allowedFields;
@@ -153,7 +161,8 @@ export class MikroOrmQueryTranslator<T extends object> {
 function normalizeCsv(input: unknown): string[] {
   if (input == null) return [];
   if (Array.isArray(input)) return input.map(String).map((v) => v.trim()).filter(Boolean);
-  return String(input).split(',').map((v) => v.trim()).filter(Boolean);
+  if (typeof input !== 'string') return [];
+  return input.split(',').map((v) => v.trim()).filter(Boolean);
 }
 
 function mergeAnd(parts: Criteria[]): Criteria {

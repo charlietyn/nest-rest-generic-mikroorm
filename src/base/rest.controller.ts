@@ -92,19 +92,50 @@ export function processRequest(input: FilterParams): FilterParams {
   const attr = input.attr ?? input.eq ?? null;
   return {
     relations: input.relations ?? null,
-    _nested: input._nested ?? false,
-    soft_delete: input.soft_delete ?? null,
+    _nested: toBoolean(input._nested) ?? false,
+    soft_delete: toBoolean(input.soft_delete) ?? null,
     attr,
     select: input.select ?? '*',
     pagination: input.pagination ?? null,
     orderby: input.orderby ?? null,
     oper: input.oper ?? null,
-    hierarchy: input.hierarchy ?? null,
-    cache: input.cache,
-    cache_ttl: input.cache_ttl,
+    hierarchy: normalizeHierarchy(input.hierarchy),
+    cache: toBoolean(input.cache),
+    cache_ttl: toNumber(input.cache_ttl),
     columns: input.columns,
     filename: input.filename,
+    template: input.template,
   };
+}
+
+/**
+ * Query strings carry no types: `?soft_delete=true` arrives as the string
+ * `"true"`, which is neither `true` nor `false` to a strict comparison. Flags are
+ * coerced here so the service layer can keep comparing against real booleans.
+ */
+export function toBoolean(value: unknown): boolean | undefined {
+  if (value == null || value === '') return undefined;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return undefined;
+}
+
+function toNumber(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/** `hierarchy` is a flag or a config object; only the flag form needs coercing. */
+function normalizeHierarchy(value: FilterParams['hierarchy']): FilterParams['hierarchy'] {
+  if (value == null || value === '') return null;
+  if (typeof value === 'boolean' || typeof value === 'object') return value;
+  const flag = toBoolean(value);
+  return flag === undefined ? value : flag;
 }
 
 export function resolveBulkIds(body: unknown): unknown[] {

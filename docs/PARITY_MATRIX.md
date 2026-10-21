@@ -2,6 +2,12 @@
 
 Status vocabulary: `ANALYZED`, `DESIGNED`, `IMPLEMENTED`, `TESTED`, `VERIFIED`, `INTENTIONAL_DIFFERENCE`.
 
+> The statuses below describe design intent. For what has actually been
+> executed - install, lint, typecheck, build and the 26-test suite - see
+> [VERIFICATION.md](VERIFICATION.md). Rows covered by executable tests today:
+> RGC-001..013 (CRUD/bulk), RGC-014..023 (filters), RGC-026/027 (pagination),
+> RGC-028 (hierarchy), RGC-035 (field policy), RGC-040 (serialization).
+
 | ID | Laravel capability | Evidence / source area | NestJS + MikroORM design | Status |
 |---|---|---|---|---|
 | RGC-001 | Generic list_all | BaseService / sibling BaseService | `BaseService.list_all()` + MikroORM `find()` | IMPLEMENTED |

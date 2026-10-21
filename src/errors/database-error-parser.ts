@@ -1,4 +1,5 @@
-import { BadRequestException, ConflictException, HttpException, InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, ConflictException, InternalServerErrorException } from '@nestjs/common';
+import type { HttpException } from '@nestjs/common';
 
 export interface ParsedDatabaseError {
   kind: 'unique' | 'foreign_key' | 'not_null' | 'check' | 'database';
