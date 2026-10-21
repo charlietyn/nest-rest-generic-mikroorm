@@ -15,7 +15,7 @@ New to the codebase? Start with **[docs/GUIDE_FOR_JUNIORS.md](docs/GUIDE_FOR_JUN
 ## Install
 
 ```bash
-npm install @ronu/nest-rest-generic-mikroorm @mikro-orm/core @mikro-orm/nestjs @mikro-orm/postgresql
+npm install @charlietyn/nest-rest-generic-mikroorm @mikro-orm/core @mikro-orm/nestjs @mikro-orm/postgresql
 ```
 
 Use the driver appropriate for your database.
@@ -46,7 +46,7 @@ declared with `defineEntity` and registered with `registerRestEntity`:
 
 ```ts
 import { defineEntity, type InferEntity } from '@mikro-orm/core';
-import { registerRestEntity } from '@ronu/nest-rest-generic-mikroorm';
+import { registerRestEntity } from '@charlietyn/nest-rest-generic-mikroorm';
 
 export const Product = defineEntity({
   name: 'Product',

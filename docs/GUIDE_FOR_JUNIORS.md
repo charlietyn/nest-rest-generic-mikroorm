@@ -68,7 +68,7 @@ Dos ideas que conviene interiorizar desde el principio:
 ```ts
 import { Module } from '@nestjs/common';
 import { MikroOrmModule } from '@mikro-orm/nestjs';
-import { GenericRestModule } from '@ronu/nest-rest-generic-mikroorm';
+import { GenericRestModule } from '@charlietyn/nest-rest-generic-mikroorm';
 
 @Module({
   imports: [
@@ -91,7 +91,7 @@ Con MikroORM 7 (los decoradores ya no existen en `@mikro-orm/core`):
 
 ```ts
 import { defineEntity, type InferEntity } from '@mikro-orm/core';
-import { registerRestEntity } from '@ronu/nest-rest-generic-mikroorm';
+import { registerRestEntity } from '@charlietyn/nest-rest-generic-mikroorm';
 import { Category } from './category.entity.js';
 
 export const Product = defineEntity({
@@ -129,7 +129,7 @@ import { EntityManager } from '@mikro-orm/core';
 import {
   BaseService, REST_GENERIC_CONFIG, RgcCacheService,
   type RestGenericConfig,
-} from '@ronu/nest-rest-generic-mikroorm';
+} from '@charlietyn/nest-rest-generic-mikroorm';
 import { Product } from './product.entity.js';
 
 @Injectable()
@@ -150,7 +150,7 @@ Eso es todo. No escribes ningún método.
 
 ```ts
 import { Controller } from '@nestjs/common';
-import { RestController } from '@ronu/nest-rest-generic-mikroorm';
+import { RestController } from '@charlietyn/nest-rest-generic-mikroorm';
 import { Product } from './product.entity.js';
 import { ProductService } from './product.service.js';
 
