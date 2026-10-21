@@ -1,5 +1,5 @@
 {
-  "name": "nest-rest-generic-mikroorm",
+  "name": "ronu/nest-rest-generic-mikroorm",
   "version": "1.0.0",
   "description": "Generic NestJS REST base classes and query tooling for MikroORM, preserving the observable API of rest-generic-class and the sibling TypeORM/Sequelize packages.",
   "author": "Charlietyn",
@@ -96,6 +96,7 @@
     "service"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }
